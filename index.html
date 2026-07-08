@@ -930,11 +930,13 @@
 
     /* ── Constants ─────────────────────────────────────────────── */
     const DENOMS = [2, 3, 4, 5, 10, 20, 30, 50, 100];
+    const DENOMS_LENGTH = DENOMS.length;
     const LS_STATE = 'lotto_v2_state';
     const LS_FLOAT_STATE = 'lotto_v2_float_state';
     const LS_SALES_STATE = 'lotto_v2_sales_state';
     const LS_META = 'lotto_v2_meta';
     const LS_TAB = 'lotto_v2_tab';
+    const LS_VIEW_MODE = 'lotto_v2_viewMode';
 
     const SHIFT_FIELDS = [
       { key: 'stock', label: "Stock" },
@@ -948,8 +950,12 @@
       { key: 'sold', label: 'Sold' },
     ];
 
+    const FIELD_DEFAULTS = { stock: '', activated: '', sold: '' };
+
     /* ── Logic Isolation ───────────────────────────────────────── */
-    function calcRow(denom, rowState, isFloat, isSales) {
+    const loadFromLS = (key, defaultValue = {}) => {
+      try { return JSON.parse(localStorage.getItem(key)) || defaultValue; } catch { return defaultValue; }
+    };
       const s = rowState || {};
       const raw = field => (s[field] !== '' && s[field] != null) ? parseInt(s[field], 10) : null;
 
@@ -1206,24 +1212,14 @@
 
     /* ── Main Application ──────────────────────────────────────── */
     function App() {
-      const [activeTab, setActiveTab] = useState(() => localStorage.getItem(LS_TAB) || 'shift');
+      const [activeTab, setActiveTab] = useState(() => loadFromLS(LS_TAB) || 'shift');
 
       // Bootstrap states
-      const [state, setState] = useState(() => {
-        try { return JSON.parse(localStorage.getItem(LS_STATE)) || {}; } catch { return {}; }
-      });
-      const [floatState, setFloatState] = useState(() => {
-        try { return JSON.parse(localStorage.getItem(LS_FLOAT_STATE)) || {}; } catch { return {}; }
-      });
-      const [salesState, setSalesState] = useState(() => {
-        try { return JSON.parse(localStorage.getItem(LS_SALES_STATE)) || {}; } catch { return {}; }
-      });
-      const [meta, setMeta] = useState(() => {
-        try { return JSON.parse(localStorage.getItem(LS_META)) || {}; } catch { return {}; }
-      });
-      const [viewMode, setViewMode] = useState(() => {
-        return localStorage.getItem('lotto_v2_viewMode') || 'cards';
-      });
+      const [state, setState] = useState(() => loadFromLS(LS_STATE));
+      const [floatState, setFloatState] = useState(() => loadFromLS(LS_FLOAT_STATE));
+      const [salesState, setSalesState] = useState(() => loadFromLS(LS_SALES_STATE));
+      const [meta, setMeta] = useState(() => loadFromLS(LS_META));
+      const [viewMode, setViewMode] = useState(() => loadFromLS(LS_VIEW_MODE) || 'cards');
       const [activeDenomIdx, setActiveDenomIdx] = useState(0);
       const [activeField, setActiveField] = useState('stock');
 
@@ -1241,7 +1237,7 @@
       useEffect(() => { localStorage.setItem(LS_META, JSON.stringify(meta)); }, [meta]);
       useEffect(() => { localStorage.setItem(LS_TAB, activeTab); }, [activeTab]);
       useEffect(() => {
-        localStorage.setItem('lotto_v2_viewMode', viewMode);
+        localStorage.setItem(LS_VIEW_MODE, viewMode);
         document.body.className = viewMode === 'cards' ? 'mode-cards' : '';
       }, [viewMode]);
 
@@ -1254,7 +1250,7 @@
       const onKeypadPress = (key) => {
         const denom = DENOMS[activeDenomIdx];
         setCurrentState(prev => {
-          const row = prev[denom] || { stock: '', activated: '', sold: '' };
+          const row = prev[denom] || FIELD_DEFAULTS;
           let currentVal = row[activeField] || '';
           if (key === 'del') currentVal = currentVal.toString().slice(0, -1);
           else if (key === 'clr') currentVal = '';
@@ -1263,25 +1259,27 @@
         });
       };
 
-      const onKeypadNext = () => {
+      const onKeypadNext = useCallback(() => {
         if (isFloat || isSales) {
-          if (activeDenomIdx < DENOMS.length - 1) setActiveDenomIdx(activeDenomIdx + 1);
-          else setActiveDenomIdx(0);
+          setActiveDenomIdx(prev => (prev < DENOMS_LENGTH - 1 ? prev + 1 : 0));
         } else {
           if (activeField === 'stock') setActiveField('activated');
           else if (activeField === 'activated') setActiveField('sold');
-          else if (activeField === 'sold') {
-            if (activeDenomIdx < DENOMS.length - 1) { setActiveDenomIdx(activeDenomIdx + 1); setActiveField('stock'); }
-            else { setActiveField('stock'); setActiveDenomIdx(0); }
+          else {
+            setActiveDenomIdx(prev => {
+              if (prev < DENOMS_LENGTH - 1) setActiveField('stock');
+              return prev < DENOMS_LENGTH - 1 ? prev + 1 : 0;
+            });
+            if (activeDenomIdx === 0) setActiveField('stock');
           }
         }
-      };
+      }, [activeField, activeDenomIdx, isFloat, isSales]);
 
-      const handleCellTap = (denom, field) => {
+      const handleCellTap = useCallback((denom, field) => {
         const idx = DENOMS.indexOf(denom);
         if (idx !== -1) setActiveDenomIdx(idx);
         setActiveField(field);
-      };
+      }, []);
 
       // Computation: totalValue
       const totalValue = useMemo(() => {
@@ -1296,13 +1294,14 @@
       }, [currentState, isFloat, isSales]);
 
       // Handlers
-      const handleClear = () => {
+      const handleClear = useCallback(() => {
         const type = isSales ? 'sales' : (isFloat ? 'float sheet' : 'shift counter');
         if (!confirm(`Clear all ${type} entries? This cannot be undone.`)) return;
         setCurrentState({});
-      };
-      const handlePrint = () => window.print();
-      const handleExport = () => exportCSV(currentState, meta, activeTab);
+      }, [isSales, isFloat, setCurrentState]);
+
+      const handlePrint = useCallback(() => window.print(), []);
+      const handleExport = useCallback(() => exportCSV(currentState, meta, activeTab), [currentState, meta, activeTab]);
 
       return html`
         <${Header} meta=${meta} setMeta=${setMeta} />
@@ -1366,8 +1365,8 @@
               <div class="carousel-view">
                 <div class="carousel-nav">
                   <button class="btn btn-ghost" disabled=${activeDenomIdx === 0} onClick=${() => setActiveDenomIdx(Math.max(0, activeDenomIdx - 1))}>← Prev</button>
-                  <span class="carousel-nav-text">Card ${activeDenomIdx + 1} of ${DENOMS.length}</span>
-                  <button class="btn btn-ghost" disabled=${activeDenomIdx === DENOMS.length - 1} onClick=${() => setActiveDenomIdx(Math.min(DENOMS.length - 1, activeDenomIdx + 1))}>Next →</button>
+                  <span class="carousel-nav-text">Card ${activeDenomIdx + 1} of ${DENOMS_LENGTH}</span>
+                  <button class="btn btn-ghost" disabled=${activeDenomIdx === DENOMS_LENGTH - 1} onClick=${() => setActiveDenomIdx(Math.min(DENOMS_LENGTH - 1, activeDenomIdx + 1))}>Next →</button>
                 </div>
                 <${InventoryCard} 
                   denom=${DENOMS[activeDenomIdx]} 
