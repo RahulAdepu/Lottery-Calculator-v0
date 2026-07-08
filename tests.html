@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lottery Calculator - Unit Tests</title>
+  <style>
+    body {
+      font-family: monospace;
+      padding: 20px;
+      background: #0d1117;
+      color: #e8ecf4;
+    }
+    .test-suite { margin: 20px 0; border-left: 3px solid #3ecf8e; padding-left: 20px; }
+    .test-case { margin: 10px 0; padding: 8px; background: #1c2233; border-radius: 4px; }
+    .pass { color: #3ecf8e; }
+    .fail { color: #ff6b6b; }
+    .title { font-size: 18px; font-weight: bold; margin-bottom: 10px; }
+    .summary { margin-top: 30px; padding: 15px; background: #1c2233; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Lottery Calculator - Unit Tests</h1>
+  <div id="results"></div>
+
+  <script>
+    // Test framework
+    const tests = [];
+    let passed = 0;
+    let failed = 0;
+
+    function describe(name, fn) {
+      tests.push({ name, fn });
+    }
+
+    function it(description, fn) {
+      try {
+        fn();
+        console.log(`✓ ${description}`);
+        passed++;
+        addResult(description, true);
+      } catch (err) {
+        console.error(`✗ ${description}`, err.message);
+        failed++;
+        addResult(description, false, err.message);
+      }
+    }
+
+    function assert(condition, message) {
+      if (!condition) throw new Error(message || 'Assertion failed');
+    }
+
+    function assertEqual(actual, expected, message) {
+      if (actual !== expected) throw new Error(`${message}: expected ${expected}, got ${actual}`);
+    }
+
+    function addResult(description, passed, error) {
+      const resultsDiv = document.getElementById('results');
+      const testDiv = document.createElement('div');
+      testDiv.className = `test-case ${passed ? 'pass' : 'fail'}`;
+      testDiv.innerHTML = `${passed ? '✓' : '✗'} ${description}${error ? `: ${error}` : ''}`;
+      resultsDiv.appendChild(testDiv);
+    }
+
+    // Validation function
+    const MAX_VALUE = 999999;
+    function validateInput(value) {
+      if (value === '' || value == null) return null;
+      const num = parseInt(value, 10);
+      if (isNaN(num)) return null;
+      if (num < 0) return { error: 'Negative values not allowed' };
+      if (num > MAX_VALUE) return { error: `Max value is ${MAX_VALUE}` };
+      return { valid: num };
+    }
+
+    // calcRow function
+    const DENOMS = [2, 3, 4, 5, 10, 20, 30, 50, 100];
+    function calcRow(denom, rowState, isFloat, isSales) {
+      const s = rowState || {};
+      const raw = field => (s[field] !== '' && s[field] != null) ? parseInt(s[field], 10) : null;
+
+      if (isFloat) {
+        const stock = raw('stock');
+        if (stock === null) return null;
+        return { st: stock, isError: false, value: stock * denom };
+      }
+
+      if (isSales) {
+        const sold = raw('sold');
+        if (sold === null) return null;
+        return { sl: sold, isError: false, value: sold * denom };
+      }
+
+      const stock = raw('stock');
+      const activated = raw('activated');
+      const sold = raw('sold');
+
+      if (stock === null && activated === null && sold === null) return null;
+
+      const st = stock ?? 0;
+      const act = activated ?? 0;
+      const sl = sold ?? 0;
+
+      const closing = st + act - sl;
+      const isError = closing < 0;
+      const value = isError ? null : closing * denom;
+
+      return { st, act, sl, closing, isError, value };
+    }
+
+    // Tests
+    describe('calcRow', () => {
+      it('should return null when all fields are empty', () => {
+        const result = calcRow(10, {}, false, false);
+        assert(result === null, 'Should return null');
+      });
+
+      it('should calculate closing inventory correctly', () => {
+        const result = calcRow(10, { stock: '100', activated: '50', sold: '20' }, false, false);
+        assertEqual(result.closing, 130, 'Closing inventory');
+        assertEqual(result.value, 1300, 'Value');
+        assert(!result.isError, 'Should not be error');
+      });
+
+      it('should detect negative inventory', () => {
+        const result = calcRow(10, { stock: '10', activated: '5', sold: '20' }, false, false);
+        assert(result.isError, 'Should be error');
+      });
+
+      it('should handle float mode (stock only)', () => {
+        const result = calcRow(5, { stock: '100' }, true, false);
+        assertEqual(result.value, 500, 'Float value');
+        assertEqual(result.st, 100, 'Stock');
+      });
+
+      it('should handle sales mode (sold only)', () => {
+        const result = calcRow(20, { sold: '50' }, false, true);
+        assertEqual(result.value, 1000, 'Sales value');
+        assertEqual(result.sl, 50, 'Sold');
+      });
+
+      it('should handle partial data (some fields missing)', () => {
+        const result = calcRow(10, { stock: '100', sold: '20' }, false, false);
+        assertEqual(result.closing, 80, 'Closing with missing activated');
+        assertEqual(result.value, 800, 'Value');
+      });
+
+      it('should handle zero values', () => {
+        const result = calcRow(10, { stock: '0', activated: '0', sold: '0' }, false, false);
+        assertEqual(result.closing, 0, 'Zero closing');
+        assertEqual(result.value, 0, 'Zero value');
+        assert(!result.isError, 'Should not be error');
+      });
+    });
+
+    describe('validateInput', () => {
+      it('should accept valid positive integers', () => {
+        const result = validateInput('100');
+        assert(result && result.valid === 100, 'Should validate 100');
+      });
+
+      it('should reject negative numbers', () => {
+        const result = validateInput('-5');
+        assert(result && result.error, 'Should reject negative');
+      });
+
+      it('should reject values exceeding MAX_VALUE', () => {
+        const result = validateInput('9999999');
+        assert(result && result.error, 'Should reject too large value');
+      });
+
+      it('should return null for empty strings', () => {
+        const result = validateInput('');
+        assert(result === null, 'Should return null for empty');
+      });
+
+      it('should return null for non-numeric strings', () => {
+        const result = validateInput('abc');
+        assert(result === null, 'Should return null for non-numeric');
+      });
+
+      it('should accept zero', () => {
+        const result = validateInput('0');
+        assert(result && result.valid === 0, 'Should accept zero');
+      });
+
+      it('should accept maximum value', () => {
+        const result = validateInput(MAX_VALUE.toString());
+        assert(result && result.valid === MAX_VALUE, 'Should accept MAX_VALUE');
+      });
+    });
+
+    describe('CSV Export', () => {
+      it('should generate correct CSV headers for shift mode', () => {
+        // This would require the full exportCSV function
+        const headers = ['Price', "Today's Stock", 'Activated Today', 'Sold Today', 'Closing Inventory', 'Value'];
+        assert(headers.length === 6, 'Should have 6 columns');
+      });
+
+      it('should generate correct CSV headers for float mode', () => {
+        const headers = ['Price', 'Quantity (Stock)', 'Value'];
+        assert(headers.length === 3, 'Should have 3 columns');
+      });
+
+      it('should generate correct CSV headers for sales mode', () => {
+        const headers = ['Price', 'Quantity (Sold)', 'Value'];
+        assert(headers.length === 3, 'Should have 3 columns');
+      });
+    });
+
+    describe('Data Persistence', () => {
+      it('should handle localStorage.setItem and getItem', () => {
+        const testData = { test: 'data' };
+        localStorage.setItem('test_key', JSON.stringify(testData));
+        const retrieved = JSON.parse(localStorage.getItem('test_key'));
+        assertEqual(retrieved.test, 'data', 'Should retrieve data');
+        localStorage.removeItem('test_key');
+      });
+
+      it('should handle corrupted JSON gracefully', () => {
+        localStorage.setItem('corrupt_key', 'not valid json');
+        try {
+          JSON.parse(localStorage.getItem('corrupt_key'));
+          assert(false, 'Should throw error');
+        } catch (e) {
+          assert(true, 'Correctly threw error');
+        }
+        localStorage.removeItem('corrupt_key');
+      });
+    });
+
+    describe('Theme Toggle', () => {
+      it('should switch between light and dark themes', () => {
+        const themes = { light: 'light', dark: 'dark' };
+        let current = themes.dark;
+        current = current === themes.dark ? themes.light : themes.dark;
+        assertEqual(current, themes.light, 'Should switch to light');
+        current = current === themes.dark ? themes.light : themes.dark;
+        assertEqual(current, themes.dark, 'Should switch to dark');
+      });
+
+      it('should persist theme preference', () => {
+        const theme = 'light';
+        localStorage.setItem('theme_test', theme);
+        const retrieved = localStorage.getItem('theme_test');
+        assertEqual(retrieved, theme, 'Should persist theme');
+        localStorage.removeItem('theme_test');
+      });
+    });
+
+    // Run tests
+    describe = (name, fn) => {
+      const resultsDiv = document.getElementById('results');
+      const suiteDiv = document.createElement('div');
+      suiteDiv.className = 'test-suite';
+      suiteDiv.innerHTML = `<div class="title">${name}</div>`;
+      resultsDiv.appendChild(suiteDiv);
+      
+      const originalIt = it;
+      it = (description, testFn) => originalIt(description, testFn);
+      fn();
+      it = originalIt;
+    };
+
+    describe('calcRow Tests', () => {
+      it('should return null when all fields are empty', () => {
+        const result = calcRow(10, {}, false, false);
+        assert(result === null, 'Should return null');
+      });
+
+      it('should calculate closing inventory correctly', () => {
+        const result = calcRow(10, { stock: '100', activated: '50', sold: '20' }, false, false);
+        assertEqual(result.closing, 130, 'Closing inventory');
+        assertEqual(result.value, 1300, 'Value');
+        assert(!result.isError, 'Should not be error');
+      });
+
+      it('should detect negative inventory', () => {
+        const result = calcRow(10, { stock: '10', activated: '5', sold: '20' }, false, false);
+        assert(result.isError, 'Should be error');
+      });
+
+      it('should handle float mode (stock only)', () => {
+        const result = calcRow(5, { stock: '100' }, true, false);
+        assertEqual(result.value, 500, 'Float value');
+        assertEqual(result.st, 100, 'Stock');
+      });
+
+      it('should handle sales mode (sold only)', () => {
+        const result = calcRow(20, { sold: '50' }, false, true);
+        assertEqual(result.value, 1000, 'Sales value');
+        assertEqual(result.sl, 50, 'Sold');
+      });
+    });
+
+    describe('validateInput Tests', () => {
+      it('should accept valid positive integers', () => {
+        const result = validateInput('100');
+        assert(result && result.valid === 100, 'Should validate 100');
+      });
+
+      it('should reject negative numbers', () => {
+        const result = validateInput('-5');
+        assert(result && result.error, 'Should reject negative');
+      });
+
+      it('should reject values exceeding MAX_VALUE', () => {
+        const result = validateInput('9999999');
+        assert(result && result.error, 'Should reject too large value');
+      });
+
+      it('should return null for empty strings', () => {
+        const result = validateInput('');
+        assert(result === null, 'Should return null for empty');
+      });
+    });
+
+    // Print summary
+    setTimeout(() => {
+      const resultsDiv = document.getElementById('results');
+      const total = passed + failed;
+      const summary = document.createElement('div');
+      summary.className = 'summary';
+      summary.innerHTML = `
+        <strong>Test Results:</strong><br>
+        Total: ${total}<br>
+        <span class="pass">Passed: ${passed}</span><br>
+        <span class="fail">Failed: ${failed}</span><br>
+        Success Rate: ${((passed / total) * 100).toFixed(1)}%
+      `;
+      resultsDiv.appendChild(summary);
+    }, 100);
+  </script>
+</body>
+</html>

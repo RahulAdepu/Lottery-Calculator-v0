@@ -51,6 +51,17 @@
       --font-mono: 'DM Mono', monospace;
     }
 
+    [data-theme="light"] {
+      --bg: #f6f8fa;
+      --surface: #eaeef2;
+      --card: #ffffff;
+      --border: rgba(0, 0, 0, .08);
+      --border-md: rgba(0, 0, 0, .15);
+      --text: #1f2937;
+      --muted: #6b7280;
+      --hint: #9ca3af;
+    }
+
     /* ============================================================
        BASE
     ============================================================ */
@@ -952,10 +963,18 @@
 
     const FIELD_DEFAULTS = { stock: '', activated: '', sold: '' };
 
+    const LS_THEME = 'lotto_v2_theme';
+    const LS_HISTORY = 'lotto_v2_history';
+    const HISTORY_MAX = 50;
+    const MAX_VALUE = 999999;
+    const THEMES = { light: 'light', dark: 'dark' };
+
     /* ── Logic Isolation ───────────────────────────────────────── */
     const loadFromLS = (key, defaultValue = {}) => {
       try { return JSON.parse(localStorage.getItem(key)) || defaultValue; } catch { return defaultValue; }
     };
+
+    function calcRow(denom, rowState, isFloat, isSales) {
       const s = rowState || {};
       const raw = field => (s[field] !== '' && s[field] != null) ? parseInt(s[field], 10) : null;
 
@@ -986,6 +1005,53 @@
       const value = isError ? null : closing * denom;
 
       return { st, act, sl, closing, isError, value };
+    }
+
+    function validateInput(value) {
+      if (value === '' || value == null) return null;
+      const num = parseInt(value, 10);
+      if (isNaN(num)) return null;
+      if (num < 0) return { error: 'Negative values not allowed' };
+      if (num > MAX_VALUE) return { error: `Max value is ${MAX_VALUE}` };
+      return { valid: num };
+    }
+
+    function exportJSON(state, floatState, salesState, meta, activeTab) {
+      const data = {
+        version: 1,
+        exportDate: new Date().toISOString(),
+        activeTab,
+        meta,
+        state: { shift: state, float: floatState, sales: salesState }
+      };
+      const json = JSON.stringify(data, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `lottery-backup-${meta.date || 'export'}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+
+    function importJSON(file, callback) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = JSON.parse(e.target.result);
+          if (data.version !== 1) throw new Error('Unsupported version');
+          callback(data);
+        } catch (err) {
+          alert(`Import failed: ${err.message}`);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function createHistoryEntry(state, floatState, salesState, meta, activeTab) {
+      return { state, floatState, salesState, meta, activeTab, timestamp: Date.now() };
     }
 
     function exportCSV(state, meta, activeTab) {
@@ -1222,6 +1288,9 @@
       const [viewMode, setViewMode] = useState(() => loadFromLS(LS_VIEW_MODE) || 'cards');
       const [activeDenomIdx, setActiveDenomIdx] = useState(0);
       const [activeField, setActiveField] = useState('stock');
+      const [theme, setTheme] = useState(() => loadFromLS(LS_THEME) || THEMES.dark);
+      const [history, setHistory] = useState([]);
+      const [historyIdx, setHistoryIdx] = useState(-1);
 
       // Sync active state/target based on mode
       const isFloat = activeTab === 'float';
@@ -1241,11 +1310,60 @@
         document.body.className = viewMode === 'cards' ? 'mode-cards' : '';
       }, [viewMode]);
 
-      // When tab changes, reset field if it doesn't belong to the new mode
+      useEffect(() => {
+        localStorage.setItem(LS_THEME, theme);
+        document.documentElement.setAttribute('data-theme', theme);
+      }, [theme]);
+      useEffect(() => {
+        const handleKeyDown = (e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+            e.preventDefault();
+            handleUndo();
+          } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+            e.preventDefault();
+            handleRedo();
+          }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+      }, [handleUndo, handleRedo]);
       useEffect(() => {
         if (isFloat && activeField !== 'stock') setActiveField('stock');
         if (isSales && activeField !== 'sold') setActiveField('sold');
       }, [activeTab]);
+
+      const addToHistory = useCallback(() => {
+        const entry = createHistoryEntry(state, floatState, salesState, meta, activeTab);
+        const newHistory = history.slice(0, historyIdx + 1);
+        newHistory.push(entry);
+        if (newHistory.length > HISTORY_MAX) newHistory.shift();
+        setHistory(newHistory);
+        setHistoryIdx(newHistory.length - 1);
+      }, [state, floatState, salesState, meta, activeTab, history, historyIdx]);
+
+      const handleUndo = useCallback(() => {
+        if (historyIdx > 0) {
+          const idx = historyIdx - 1;
+          const entry = history[idx];
+          setState(entry.state);
+          setFloatState(entry.floatState);
+          setSalesState(entry.salesState);
+          setMeta(entry.meta);
+          setHistoryIdx(idx);
+        }
+      }, [history, historyIdx]);
+
+      const handleRedo = useCallback(() => {
+        if (historyIdx < history.length - 1) {
+          const idx = historyIdx + 1;
+          const entry = history[idx];
+          setState(entry.state);
+          setFloatState(entry.floatState);
+          setSalesState(entry.salesState);
+          setMeta(entry.meta);
+          setHistoryIdx(idx);
+        }
+      }, [history, historyIdx]);
 
       const onKeypadPress = (key) => {
         const denom = DENOMS[activeDenomIdx];
@@ -1297,11 +1415,37 @@
       const handleClear = useCallback(() => {
         const type = isSales ? 'sales' : (isFloat ? 'float sheet' : 'shift counter');
         if (!confirm(`Clear all ${type} entries? This cannot be undone.`)) return;
+        addToHistory();
         setCurrentState({});
-      }, [isSales, isFloat, setCurrentState]);
+      }, [isSales, isFloat, setCurrentState, addToHistory]);
 
       const handlePrint = useCallback(() => window.print(), []);
       const handleExport = useCallback(() => exportCSV(currentState, meta, activeTab), [currentState, meta, activeTab]);
+      
+      const handleExportJSON = useCallback(() => {
+        exportJSON(state, floatState, salesState, meta, activeTab);
+      }, [state, floatState, salesState, meta, activeTab]);
+
+      const handleImportJSON = useCallback(() => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.onchange = (e) => {
+          importJSON(e.target.files[0], (data) => {
+            setState(data.state.shift);
+            setFloatState(data.state.float);
+            setSalesState(data.state.sales);
+            setMeta(data.meta);
+            setActiveTab(data.activeTab);
+            alert('Data imported successfully!');
+          });
+        };
+        input.click();
+      }, []);
+
+      const toggleTheme = useCallback(() => {
+        setTheme(t => t === THEMES.dark ? THEMES.light : THEMES.dark);
+      }, []);
 
       return html`
         <${Header} meta=${meta} setMeta=${setMeta} />
@@ -1325,10 +1469,15 @@
                 <button class=${`toggle-btn ${viewMode === 'cards' ? 'active' : ''}`} onClick=${() => setViewMode('cards')}>Card</button>
               </div>
             </div>
-            <div class="actions" style="justify-content: flex-start; gap: 8px;">
-              <button class="btn btn-ghost" onClick=${handleExport} style="padding: 6px 12px; font-size: 12px;">Export CSV</button>
-              <button class="btn btn-ghost" onClick=${handlePrint} style="padding: 6px 12px; font-size: 12px;">Print PDF</button>
-              <button class="btn btn-danger" onClick=${handleClear} style="padding: 6px 12px; font-size: 12px;">Reset All</button>
+            <div class="actions" style="justify-content: flex-start; gap: 8px; flex-wrap: wrap;">
+              <button class="btn btn-ghost" onClick=${handleExport} style="padding: 6px 12px; font-size: 12px;">📊 CSV</button>
+              <button class="btn btn-ghost" onClick=${handleExportJSON} style="padding: 6px 12px; font-size: 12px;">💾 Backup</button>
+              <button class="btn btn-ghost" onClick=${handleImportJSON} style="padding: 6px 12px; font-size: 12px;">📂 Import</button>
+              <button class="btn btn-ghost" onClick=${handleUndo} disabled=${historyIdx <= 0} style="padding: 6px 12px; font-size: 12px;" title="Undo (Ctrl+Z)">↶ Undo</button>
+              <button class="btn btn-ghost" onClick=${handleRedo} disabled=${historyIdx >= history.length - 1} style="padding: 6px 12px; font-size: 12px;" title="Redo (Ctrl+Y)">↷ Redo</button>
+              <button class="btn btn-ghost" onClick=${toggleTheme} style="padding: 6px 12px; font-size: 12px;" title="Toggle Theme">${theme === THEMES.dark ? '☀️ Light' : '🌙 Dark'}</button>
+              <button class="btn btn-ghost" onClick=${handlePrint} style="padding: 6px 12px; font-size: 12px;">🖨️ Print</button>
+              <button class="btn btn-danger" onClick=${handleClear} style="padding: 6px 12px; font-size: 12px;">🗑️ Clear</button>
             </div>
           </div>
           
